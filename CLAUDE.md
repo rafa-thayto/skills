@@ -35,6 +35,16 @@ These are the load-bearing rules for skills here, beyond the usual frontmatter f
 - **Body under ~500 lines.** Split overflow into `references/<topic>.md` and point to it from the body. Don't inline what can be loaded on demand.
 - **State the *why* behind hard rules.** Future Claude follows rules better when the reasoning is explicit. Reserve all-caps `MUST`/`NEVER` for absolutes; explain the rest.
 - **Model the rules in the prose.** If the skill bans em dashes or effort estimates in output, don't use them in the SKILL.md text either — patterns leak.
+- **Declare the write surface up top.** If the skill mutates the target repo (commits, pushes, API calls), state exactly what it touches in the first paragraph of the body, not just in the inventory row. The asymmetry vs. read-only skills is dangerous when implicit; future Claude will assume read-only by default.
+- **One worktree per parallel unit of work.** When a skill dispatches subagents that each operate on a different branch or PR, give each agent its own `git worktree add` directory. Subagents sharing one checkout corrupt each other's index — this is non-obvious and has no good error message.
+
+## GitHub gotchas
+
+Recurring details that matter when authoring skills that talk to GitHub via `gh`:
+
+- **Silent review-thread resolution is GraphQL-only.** REST has no endpoint for marking a review thread resolved without replying. Use the `resolveReviewThread` mutation against a thread ID fetched from the `pullRequest.reviewThreads` GraphQL field — REST won't even surface `isResolved` on review comments.
+- **Force-push uses `--force-with-lease`.** Never plain `--force`. This is a global rule but worth restating per skill that pushes, because the difference shows up only when two writers race.
+- **Rebase invalidates approvals on most repos.** Skills that rebase a PR with existing approvals should ask the user first.
 
 ## Skills in this repo
 
@@ -42,6 +52,7 @@ These are the load-bearing rules for skills here, beyond the usual frontmatter f
 |---|---|---|
 | `pr-review-opinionated-thayto` | Reviews a GitHub PR and posts the review through `gh`. Triggered by PR URLs or "review this PR". | Read-only on the target. Posts only via `gh api`, never via local git. |
 | `write-issue-thayto` | Scaffolds a numbered issue file under `docs/issues/` with frontmatter (id, status, title) and the sections Description / Why / Acceptance / What you must do / Hints. Triggered by "create an issue", "new ticket", "linear ticket", etc. | Writes one new file at `docs/issues/<NNN>-<slug>.md`. Creates the folder if missing. Does not edit existing tickets. |
+| `address-my-prs-thayto` | Triages every open PR by the user on the current repo: addresses review comments per a context-aware rubric, fixes broken CI, rebases on the base branch, resolves threads silently via GraphQL, re-requests review. Each PR runs in a parallel subagent inside its own git worktree. Triggered by "check my PRs", "address my PR comments", "babysit my PRs", etc. | Per PR: commits to the head branch and `git push` (or `git push --force-with-lease` after rebase); resolves review threads via the `resolveReviewThread` GraphQL mutation; re-requests review via `gh api`. Creates worktrees under `../wt-<branch>` and leaves them in place. Never opens, closes, merges, or replies on threads. |
 
 When adding a new skill, append a row here so the inventory stays useful as a glance-sheet.
 

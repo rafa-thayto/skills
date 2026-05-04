@@ -1,6 +1,6 @@
 ---
 name: address-my-prs-thayto
-description: Use whenever the user wants to triage, babysit, or address feedback across all of their open pull requests on the current GitHub repo at once. Triggers on phrases like "check my PRs", "address PR comments on my PRs", "fix CI on my PRs", "triage my open PRs", "babysit my PRs", "go through my pull requests", or pasting a PR-list URL like https://github.com/<owner>/<repo>/pulls (note: list URL, not a single /pull/<n>). Triggers when the user references multiple of their own PRs (author rafa-thayto / @me) and wants review comments addressed, broken CI fixed, base-branch rebases performed, threads resolved silently, and reviewers re-requested. NOT for reviewing a single PR as a reviewer (use pr-review-opinionated-thayto). NOT for opening a new PR.
+description: Use whenever the user wants to triage, babysit, or address feedback across all of their open pull requests on the current GitHub repo at once. Triggers on phrases like "check my PRs", "address PR comments on my PRs", "fix CI on my PRs", "triage my open PRs", "babysit my PRs", "go through my pull requests", or pasting a PR-list URL like https://github.com/<owner>/<repo>/pulls (note: list URL, not a single /pull/<n>). Triggers when the user references multiple of their own PRs (author rafa-thayto / @me) and wants review comments addressed, broken CI fixed, base-branch rebases performed, threads resolved silently (the skill never replies on a thread — only resolves or escalates), and reviewers re-requested. NOT for reviewing a single PR as a reviewer (use pr-review-opinionated-thayto). NOT for opening a new PR.
 ---
 
 # Address my open PRs
@@ -10,7 +10,7 @@ Triages every open PR authored by the user on the current GitHub repo. The repo 
 ## Hard rules
 
 - **One worktree per PR.** Parallel subagents on the same checkout will corrupt each other's index. Use `git worktree add` per PR. Never `git checkout` the trunk to switch.
-- **Silent resolution only.** Never reply on a review thread to dismiss it. If a comment cannot be silently resolved (it needs discussion or pushback), escalate to the user instead — leave the thread open.
+- **Never reply on a review thread, ever.** The skill resolves; it does not converse. No "done", no "good catch", no "I disagree because…", no clarifying questions, not a single character of comment-body output to GitHub. The only thread-state change this skill ever makes is `resolveReviewThread`. If a comment needs a reply (discussion, pushback, a question), escalate it to the user with the thread left open — the user replies, not the skill.
 - **Never resolve a thread you did not address.** Resolution implies "done"; using it to clear backlog is dishonest to the reviewer.
 - **Never `--no-verify`, `--no-edit` on rebase, or plain `--force`.** Use `--force-with-lease` after rebase. If a hook fails, fix the underlying issue.
 - **Confirm before rebasing an approved PR.** On most repos, rebase invalidates approvals. If the PR has approving reviews, ask the user before rebasing.

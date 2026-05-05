@@ -1,6 +1,6 @@
 ---
 name: address-my-prs-thayto
-description: Use whenever the user wants to triage, babysit, or address feedback across all of their open pull requests on the current GitHub repo at once. Triggers on phrases like "check my PRs", "address PR comments on my PRs", "fix CI on my PRs", "triage my open PRs", "babysit my PRs", "go through my pull requests", or pasting a PR-list URL like https://github.com/<owner>/<repo>/pulls (note: list URL, not a single /pull/<n>). Triggers when the user references multiple of their own PRs (author rafa-thayto / @me) and wants review comments addressed, broken CI fixed, base-branch rebases performed, threads resolved silently (the skill never replies on a thread — only resolves or escalates), and reviewers re-requested. NOT for reviewing a single PR as a reviewer (use pr-review-opinionated-thayto). NOT for opening a new PR.
+description: Use whenever the user wants to triage, babysit, or address feedback across all of their open pull requests on the current GitHub repo at once. Triggers on phrases like "check my PRs", "address PR comments on my PRs", "fix CI on my PRs", "triage my open PRs", "babysit my PRs", "go through my pull requests", or pasting a PR-list URL like https://github.com/<owner>/<repo>/pulls (note: list URL, not a single /pull/<n>). Triggers when the user references multiple of their own PRs (author resolved dynamically from `gh api user` and filtered with `--author @me` — never hardcoded; e.g. rafa-thayto when that's the authenticated login) and wants review comments addressed, broken CI fixed, base-branch rebases performed, threads resolved silently (the skill never replies on a thread — only resolves or escalates), and reviewers re-requested. NOT for reviewing a single PR as a reviewer (use pr-review-opinionated-thayto). NOT for opening a new PR.
 ---
 
 # Address my open PRs
@@ -45,13 +45,43 @@ When uncertain, **escalate**. The cost of a missed escalation (silently overridi
 
 ## Workflow
 
-### 1. Discover PRs
+### 1. Verify identity & repo, then discover PRs
+
+Resolve the authenticated user and the target repo from local git/gh state — never hardcode a login or repo slug, and never silently rely on a single source.
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-gh pr list --author @me --state open \
+# 1a. Authenticated user (the source of truth for `--author @me`)
+gh auth status                              # fail loudly if unauthenticated
+GH_LOGIN=$(gh api user --jq .login)         # who @me resolves to on GitHub
+GIT_EMAIL=$(git config user.email)          # local git identity (announce only)
+
+# 1b. Repo derived from the local origin remote, NOT just gh's default.
+#     We push to origin, so origin is what we mutate. In a fork checkout,
+#     gh's default may resolve to the upstream — that's fine, but we still
+#     operate on origin.
+ORIGIN_URL=$(git remote get-url origin)
+REPO=$(gh repo view "$ORIGIN_URL" --json nameWithOwner -q .nameWithOwner)
+GH_DEFAULT=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+
+if [ "$REPO" != "$GH_DEFAULT" ]; then
+  echo "note: git origin = $REPO, gh default = $GH_DEFAULT — operating on origin"
+fi
+```
+
+Announce one line back to the user before fetching anything mutable:
+
+> `Authenticated as @$GH_LOGIN ($GIT_EMAIL); operating on $REPO.`
+
+If `gh auth status` fails, the user has previously named a different login in this conversation, or the announced login doesn't match what the user expects, **stop and ask** before listing PRs. Do not silently operate on a different account's PRs.
+
+Then list:
+
+```bash
+gh pr list --repo "$REPO" --author @me --state open \
   --json number,title,headRefName,baseRefName,url,isDraft,reviewDecision,mergeable
 ```
+
+`--author @me` is server-resolved to `$GH_LOGIN`, so the filter is identity-correct without hardcoding any login. `--repo "$REPO"` pins it to origin even if the cwd's gh default differs.
 
 Filter out drafts. For each remaining PR, dispatch one subagent (see step 2). Cap at 5 in flight; if the user has more, queue.
 

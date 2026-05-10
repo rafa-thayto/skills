@@ -1,0 +1,159 @@
+---
+name: simplify-thayto
+description: Use whenever the user wants to review and simplify the code they just wrote on the current branch — refactor with KISS and DRY, kill duplicates, then fix TypeScript errors and warnings, then verify tests pass. Triggers on `/simplify-thayto`, and on phrases like "simplify our changes", "simplify the code we just wrote", "review and improve our changes", "DRY this up", "refactor with KISS", "deduplicate this", "tighten up the diff", "clean up what we did", "kill the duplication", or any equivalent ask to revisit and tighten the branch diff before shipping. Applies hard structural rules — avoid classes, no nested ifs, no nested ternaries, prefer small functions — and delegates type-level work to the `typescript-advanced-types` skill so types stay simple. Never creates a branch and never commits; edits the working tree in place and runs the test suite locally so the user reviews the diff themselves.
+---
+
+# simplify-thayto
+
+Refactor the current branch's diff for KISS/DRY, fix TypeScript noise, run the tests. **Read this once, then work the four passes in order.** Each pass has a single job; don't blur them — that's how scope creeps and the diff stops being reviewable.
+
+## Write surface (read first)
+
+This skill **edits source files in the current checkout** and **runs the test suite locally**. It does not:
+
+- create branches (`git checkout -b`, `git switch -c`) — explicitly disallowed by the user's standing instruction
+- commit, stage with `git add`, push, or touch any git ref
+- open PRs, post comments, or call any remote API
+
+If you find yourself reaching for `git checkout` or `git commit`, stop — that's out of scope. The user reviews the working-tree diff themselves and commits when they're ready.
+
+## Step 0 — Establish the diff
+
+Default scope is **everything this branch adds vs. `main`** plus uncommitted edits:
+
+```bash
+git merge-base HEAD main
+git diff $(git merge-base HEAD main)...HEAD
+git diff                    # unstaged
+git diff --cached           # staged
+```
+
+If `main` doesn't exist locally (some repos use `master`, `develop`, or a custom default), fall back to `git remote show origin | sed -n '/HEAD branch/s/.*: //p'` and use that. If the user named a different base ("simplify what's on top of `release/v3`"), use that base instead.
+
+The point: **only touch lines this branch introduced**. Don't refactor unrelated code that happens to be in files you're editing — that pollutes the diff and makes review harder. If you spot something worth fixing outside the diff, mention it at the end so the user can decide.
+
+## Step 1 — KISS / DRY refactor pass
+
+Read the diff with the rules below in mind and apply them. The rules aren't decoration — each one exists because the alternative is the failure mode the user has been bitten by before.
+
+### Hard rules
+
+| Rule | Why it's a rule |
+|---|---|
+| **Avoid classes.** Prefer modules of small pure functions. | Classes accumulate state and methods that lock callers into one shape. Functions compose freely and are easier to test in isolation. Keep classes only when the problem really is stateful (e.g. a long-lived connection wrapper) and the alternative is uglier. |
+| **No nested ifs.** Flatten with early returns / guard clauses. | Nested conditionals hide the path through the function. A flat sequence of guards reads top-to-bottom and each branch is a single hop. |
+| **No nested ternaries.** Use a small helper, a `switch`, or an object lookup. | Nested `?:` collapses control flow into an expression that can't be debugged or annotated. Lift it out and name it. |
+| **Prefer small functions.** If a function does two things, split it. | Small functions name intent, make diffs surgical, and let you reuse pieces. The win compounds — once one big function is split, duplication elsewhere becomes visible. |
+
+These are preferences with teeth, not absolutes. If breaking a rule is genuinely the cleaner outcome (e.g. a one-off ternary that reads better than a helper, or a class that mirrors a domain object), keep it and note the reasoning at the end.
+
+### Look for duplication
+
+Across the diff, find:
+
+- **Copy-pasted blocks** — even with renamed variables. Extract to a function.
+- **Parallel structures** — two functions that differ only in one type or one literal. Parameterise.
+- **Repeated literals** — magic numbers or strings used in 3+ places. Pull to a `const`.
+- **Repeated guard clauses** — same null/empty check at the top of multiple call sites. Push the check into the helper, or wrap behind a single entry point.
+
+Three is the threshold for "this is a pattern, not a coincidence." Two occurrences is usually fine; deduping prematurely creates abstractions that don't fit later requirements. Don't invent indirection to satisfy DRY when the duplicates aren't really the same concept.
+
+### What to leave alone
+
+- Code outside the branch diff. (Out of scope — see Step 0.)
+- Tests, unless they're directly broken by your refactor. Tests are the safety net; rewriting them in the same pass as the code makes regressions invisible.
+- Style-only changes (renames, formatting) that aren't load-bearing. Those belong in a separate pass; mixing them with structural refactors hides the structural change in noise.
+
+## Step 2 — TypeScript fix pass
+
+Only after Step 1's refactor is on disk. Don't interleave — finishing the structural pass first means the type errors you fix are the ones that matter, not phantoms that disappear when functions get split.
+
+```bash
+# Run the project's type checker. Common entry points, in order of preference:
+pnpm tsc --noEmit         # or: npm run typecheck / yarn typecheck / bunx tsc --noEmit
+```
+
+Read the output and fix:
+
+- **Errors** introduced or surfaced by the diff.
+- **Warnings** in files this branch touched. Don't go on a project-wide warning hunt — that's a separate task and pollutes the diff.
+
+For anything that requires non-trivial type machinery — generics that need constraints, conditional types, mapped types, template literals, inferring from a function signature, distributing unions — **invoke the `typescript-advanced-types` skill** rather than improvising. It exists exactly for this and will keep the type code simpler and more idiomatic than ad-hoc inference. Examples that should route there:
+
+- "I have an object whose values depend on its keys" → mapped type
+- "the return type changes based on the argument" → conditional type / overloads
+- "I want to extract the parameter types of this callback" → utility types like `Parameters<T>`
+- "this generic function needs to constrain `T` to objects with a `.id` field" → constraint with `extends`
+
+If the project isn't TypeScript, this step is a no-op — say so and move on. If `tsc` isn't configured (e.g. JS-only with JSDoc), still scan the diff for any TS files added and surface concerns; otherwise skip.
+
+### Type-quality rules (consistent with `typescript`)
+
+- No `any`. Use `unknown` when the type is genuinely unknown and narrow.
+- Avoid `as` casts unless asserting at a boundary the type system can't see (e.g. `JSON.parse`).
+- Prefer narrow input/output types over wide unions you have to discriminate later.
+
+## Step 3 — Verify with the test suite
+
+```bash
+pnpm test                 # or: npm test / yarn test / bun test / vitest run / jest
+```
+
+Run the project's full test command. Read the output, don't just glance at the exit code.
+
+- **All green** → done. Move to Step 4.
+- **Failures caused by your refactor** → fix them. The fix is usually a missed callsite update or a broken assertion that was relying on the old shape. If the fix would require changing test *expectations* (not just call shape), stop and surface it — that's a behaviour change disguised as a refactor and the user has to make the call.
+- **Pre-existing failures unrelated to your diff** → don't touch them. Surface them in the final report so the user knows the suite was already red, but don't fix them in this skill. Mixing unrelated fixes into a refactor PR is the thing this skill is meant to prevent.
+
+If the test command isn't obvious, look at `package.json` `scripts.test` (or `Makefile`, `justfile`, `pyproject.toml`, etc.). Don't guess — running the wrong command and getting a passing exit code is worse than asking.
+
+## Step 4 — Report
+
+End with a short summary the user can scan in 10 seconds:
+
+```
+Refactored: <N> files, <M> hunks
+KISS/DRY:
+  - <one-line description of each meaningful structural change>
+TypeScript:
+  - <errors fixed | warnings fixed | n/a>
+Tests: <pass | fail with details>
+
+Out of scope (not changed):
+  - <anything you noticed that wasn't in the diff but might be worth a follow-up>
+```
+
+Keep the body terse. The user has the diff in front of them; they don't need a paraphrase. The point of the report is to flag anything that wasn't pure mechanics — a deviation from the rules and why, a behaviour change that fell out of the refactor, a pre-existing failing test.
+
+## When NOT to use this skill
+
+- The user is asking for a **review only**, not edits — that's `reviewing-code` or `pr-review-opinionated-thayto`.
+- The user wants to refactor an entire codebase or a file outside the current diff — out of scope, this skill is branch-diff-bounded by design.
+- The user wants to **add** a feature. This skill simplifies what's already there; it doesn't grow scope.
+- There's no diff vs. base (clean tree, branch == main). Tell the user there's nothing to simplify rather than inventing work.
+
+## Worked example
+
+User: *"again, review our code implementations then let's improve our changes that we did, look for duplicated code, and learn more if is possible to improve and refactor using KISS and DRY principles. avoid classes, nested ifs, nested ternaries, prefer small functions. then fix the typescript errors and warnings. at the end, check tests. don't create a new branch."*
+
+Flow:
+
+1. `git diff $(git merge-base HEAD main)...HEAD` — confirm 4 files changed in `src/checkout/`.
+2. Spot a class `OrderTotaliser` with two methods, both pure, used once each → flatten to two functions in `total.ts`. Spot a 3-deep ternary in `format-line.ts` → lift to a small `pickLabel(line)` helper. Spot the same `if (!user) return null` guard in three components → push into the `useUser()` hook.
+3. `pnpm tsc --noEmit` flags two errors caused by the function split (callsites not updated) and one pre-existing warning about an unused import in a touched file. Fix all three. The unused import surfaced because the refactor removed its only use — that's in scope.
+4. `pnpm test` — 1 failing test relied on `OrderTotaliser` being a class instance. Update the import to call the new function. All green.
+5. Report:
+   ```
+   Refactored: 4 files, 7 hunks
+   KISS/DRY:
+     - flattened OrderTotaliser class → 2 pure functions in total.ts
+     - lifted nested ternary in format-line.ts to pickLabel()
+     - moved repeated !user guard into useUser() hook
+   TypeScript: 2 errors fixed (callsite updates), 1 unused-import warning removed
+   Tests: pass (1 test updated to use the new function import)
+
+   Out of scope:
+     - format-line.ts still imports a deprecated date util — worth a follow-up.
+   ```
+
+That's the shape. No branch, no commit, the user reads the diff and ships it.

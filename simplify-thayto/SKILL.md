@@ -1,6 +1,6 @@
 ---
 name: simplify-thayto
-description: Use whenever the user wants to review and simplify the code they just wrote on the current branch — refactor with KISS and DRY, kill duplicates, then fix TypeScript errors and warnings, then verify tests pass. Triggers on `/simplify-thayto`, and on phrases like "simplify our changes", "simplify the code we just wrote", "review and improve our changes", "DRY this up", "refactor with KISS", "deduplicate this", "tighten up the diff", "clean up what we did", "kill the duplication", or any equivalent ask to revisit and tighten the branch diff before shipping. Applies hard structural rules — avoid classes, no nested ifs, no nested ternaries, prefer small functions — and delegates type-level work to the `typescript-advanced-types` skill so types stay simple. Never creates a branch and never commits; edits the working tree in place and runs the test suite locally so the user reviews the diff themselves.
+description: Use whenever the user wants to review and simplify the code they just wrote on the current branch — refactor with KISS and DRY, kill duplicates, strip unnecessary comments, then fix TypeScript errors and warnings, then verify tests pass. Triggers on `/simplify-thayto`, and on phrases like "simplify our changes", "simplify the code we just wrote", "review and improve our changes", "DRY this up", "refactor with KISS", "deduplicate this", "tighten up the diff", "clean up what we did", "kill the duplication", "remove unnecessary comments", "strip dead comments", "kill the comment noise", or any equivalent ask to revisit and tighten the branch diff before shipping. Applies hard structural rules — avoid classes, no nested ifs, no nested ternaries, prefer small functions — keeps only WHY comments and removes WHAT-comments / tombstones / ticket references, and delegates type-level work to the `typescript-advanced-types` skill so types stay simple. Never creates a branch and never commits; edits the working tree in place and runs the test suite locally so the user reviews the diff themselves.
 ---
 
 # simplify-thayto
@@ -57,6 +57,27 @@ Across the diff, find:
 - **Repeated guard clauses** — same null/empty check at the top of multiple call sites. Push the check into the helper, or wrap behind a single entry point.
 
 Three is the threshold for "this is a pattern, not a coincidence." Two occurrences is usually fine; deduping prematurely creates abstractions that don't fit later requirements. Don't invent indirection to satisfy DRY when the duplicates aren't really the same concept.
+
+### Strip unnecessary comments
+
+After the structural rewrites land, scan the surviving lines for comments that don't earn their place. Do this *after* dedup and extraction — half the comments you'd have judged are gone with the code they explained, and a few you'd have kept now turn out to be redundant with a freshly named helper. The rubric: **keep WHY, remove WHAT.**
+
+Remove:
+
+- **Paraphrase comments** — `// increment the counter` above `counter++`, `// loop over users` above `for (const user of users)`. The name and the operator already say it.
+- **Tombstones and changelog notes** — `// removed X`, `// was: oldFn()`, `// TODO from PR #123`, `// kept for backwards compat (delete after Oct)` when the code below it is current. Git history is the changelog; the file is the present.
+- **"Used by" / "called from" pointers** — they go stale silently as callers move. Use `git grep` to find callers, not comments.
+- **Task / ticket references inside code** — `// fixes JIRA-1234`, `// added for the onboarding flow`, `// per Bernardo's request`. That context belongs in the commit message and PR description, not the file.
+- **Defensive narration of obvious branches** — `// if user is not logged in, redirect` above `if (!user) redirect()`.
+- **Redundant docstrings on exported functions** — `/** Returns the user. */` above `export function getUser(id: string): User` adds nothing the signature doesn't carry. Strip JSDoc/TSDoc that re-states the name and types. Keep it when it documents WHY (a constraint, an invariant, a non-obvious caller contract).
+
+Keep:
+
+- **WHY comments** — hidden constraints, invariants, workarounds for specific bugs, surprising behavior a reader would otherwise have to reverse-engineer. These pay rent.
+- **Pointers the code itself can't carry** — RFC numbers, vendor bug URLs, regulatory rule citations, links to the discussion that explains a non-obvious choice.
+- **License headers and required attribution.**
+
+If a comment is borderline, leave it. The pass is about removing cruft, not enforcing style; deleting a comment a future reader needed is more expensive than skipping one that was merely redundant. Only touch comments on lines this branch added or modified — pre-existing comments outside the diff are out of scope, same rule as everything else in Step 1.
 
 ### What to leave alone
 
@@ -115,6 +136,8 @@ End with a short summary the user can scan in 10 seconds:
 Refactored: <N> files, <M> hunks
 KISS/DRY:
   - <one-line description of each meaningful structural change>
+Comments: <N removed | n/a>
+  - <one line per non-obvious removal, e.g. "stripped tombstone in foo.ts", "dropped redundant JSDoc on getUser">
 TypeScript:
   - <errors fixed | warnings fixed | n/a>
 Tests: <pass | fail with details>
@@ -140,15 +163,20 @@ Flow:
 
 1. `git diff $(git merge-base HEAD main)...HEAD` — confirm 4 files changed in `src/checkout/`.
 2. Spot a class `OrderTotaliser` with two methods, both pure, used once each → flatten to two functions in `total.ts`. Spot a 3-deep ternary in `format-line.ts` → lift to a small `pickLabel(line)` helper. Spot the same `if (!user) return null` guard in three components → push into the `useUser()` hook.
-3. `pnpm tsc --noEmit` flags two errors caused by the function split (callsites not updated) and one pre-existing warning about an unused import in a touched file. Fix all three. The unused import surfaced because the refactor removed its only use — that's in scope.
-4. `pnpm test` — 1 failing test relied on `OrderTotaliser` being a class instance. Update the import to call the new function. All green.
-5. Report:
+3. Comment sweep over the changed lines: drop `// calculate total` above the now one-line `sum(lineItems)` call (paraphrase), drop the `// fixes CHK-481` next to a guard clause (ticket reference belongs in the PR description), drop the redundant `/** Returns the formatted label. */` above `pickLabel()`. Keep the comment in `tax.ts` that explains *why* the rounding step uses banker's rounding — that's load-bearing context a reader can't recover.
+4. `pnpm tsc --noEmit` flags two errors caused by the function split (callsites not updated) and one pre-existing warning about an unused import in a touched file. Fix all three. The unused import surfaced because the refactor removed its only use — that's in scope.
+5. `pnpm test` — 1 failing test relied on `OrderTotaliser` being a class instance. Update the import to call the new function. All green.
+6. Report:
    ```
    Refactored: 4 files, 7 hunks
    KISS/DRY:
      - flattened OrderTotaliser class → 2 pure functions in total.ts
      - lifted nested ternary in format-line.ts to pickLabel()
      - moved repeated !user guard into useUser() hook
+   Comments: 3 removed
+     - dropped paraphrase comment above sum() in total.ts
+     - dropped CHK-481 ticket reference in checkout.tsx
+     - dropped redundant JSDoc on pickLabel() in format-line.ts
    TypeScript: 2 errors fixed (callsite updates), 1 unused-import warning removed
    Tests: pass (1 test updated to use the new function import)
 

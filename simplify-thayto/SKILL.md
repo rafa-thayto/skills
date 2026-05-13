@@ -89,9 +89,19 @@ If a comment is borderline, leave it. The pass is about removing cruft, not enfo
 
 Only after Step 1's refactor is on disk. Don't interleave — finishing the structural pass first means the type errors you fix are the ones that matter, not phantoms that disappear when functions get split.
 
+### Package manager preference
+
+Detect by lockfile first — the lockfile wins, always: `bun.lockb` or `bun.lock` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. Running the wrong one regenerates a sibling lockfile and corrupts the workspace, so this isn't a style preference, it's correctness.
+
+When **no lockfile is present** (fresh init, lockfile gitignored, monorepo root with no manager pinned), prefer **`bun` > `pnpm` > `yarn` > `npm`** — bun is fastest and the user's default. Same preference applies in every command block below.
+
 ```bash
-# Run the project's type checker. Common entry points, in order of preference:
-pnpm tsc --noEmit         # or: npm run typecheck / yarn typecheck / bunx tsc --noEmit
+# Run the project's type checker. Pick the row that matches the lockfile;
+# if none, use the top row (bun).
+bun x tsc --noEmit        # bun.lockb / bun.lock
+pnpm tsc --noEmit         # pnpm-lock.yaml
+yarn tsc --noEmit         # yarn.lock
+npx tsc --noEmit          # package-lock.json
 ```
 
 Read the output and fix:
@@ -116,8 +126,13 @@ If the project isn't TypeScript, this step is a no-op — say so and move on. If
 
 ## Step 3 — Verify with the test suite
 
+Same package-manager rule as Step 2 — lockfile wins; otherwise prefer `bun > pnpm > yarn > npm`.
+
 ```bash
-pnpm test                 # or: npm test / yarn test / bun test / vitest run / jest
+bun test                  # bun.lockb / bun.lock  (or: bun run test if the project defines a test script)
+pnpm test                 # pnpm-lock.yaml
+yarn test                 # yarn.lock
+npm test                  # package-lock.json
 ```
 
 Run the project's full test command. Read the output, don't just glance at the exit code.
